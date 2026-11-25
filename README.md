@@ -81,7 +81,7 @@ As an open source hardware, schematics including part numbers and PCB layout fil
 
    For the very first install, as there is no firmware present, you will need to hold the button pressed while plugging in, once any version of the firmware has been installed, downloading can be done without pushing the button.
 
-   ##### [Web Installer Page](https://timj-code.github.io/universal_ac_controller/firmware)
+   ##### [Web Installer Page](https://timj-code.github.io/universal_ac_controller)
 
 2. ### Clone and Compile (Custom code)
    
