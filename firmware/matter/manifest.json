@@ -1,0 +1,16 @@
+{
+  "name": "BC7215 AC Matter",
+  "version": "0.0.0",
+  "new_install_prompt_erase": false,
+  "builds": [
+    {
+      "chipFamily": "ESP32-C3",
+      "parts": [
+        {
+          "path": "firmware.factory.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}

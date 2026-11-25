@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7fbff">
+  <meta name="description" content="Install ESPHome or Matter firmware for your BC7215 universal air conditioner controller.">
+  <title>BC7215 AC Controller | Web Installer</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    :root {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color-scheme: light;
+      --bg: #f7fbff;
+      --panel: #ffffff;
+      --text: #18334c;
+      --muted: #667e91;
+      --line: #e0edf5;
+      --mint: #12b89c;
+      --blue: #2696e3;
+      --esp-tools-button-color: #12b89c;
+      --esp-tools-button-text-color: #ffffff;
+      --esp-tools-button-border-radius: 13px;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(ellipse at 12% 6%, rgba(125, 218, 245, .23), transparent 42%),
+        radial-gradient(ellipse at 92% 22%, rgba(191, 167, 246, .16), transparent 38%),
+        linear-gradient(180deg, #f6fcff 0%, #f7fbff 50%, #edf9f5 100%);
+      color: var(--text); line-height: 1.5;
+    }
+    a { color: #127dbb; }
+    a:hover { color: #085b8e; }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    main { max-width: 1060px; margin: auto; padding: 52px 20px 74px; }
+    header { text-align: center; padding-bottom: 35px; }
+    .brand { letter-spacing: .16em; font-size: .77rem; font-weight: 800; color: #0ba795; }
+    h1 { font-size: clamp(1.85rem, 4vw, 3rem); margin: 9px 0 8px; letter-spacing: -.038em; font-weight: 780; }
+    .intro { max-width: 680px; margin: 4px auto 0; color: var(--muted); }
+    .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; align-items: stretch; }
+    .card {
+      background: rgba(255, 255, 255, .95);
+      border: 1px solid rgba(204, 228, 239, .95);
+      border-radius: 22px;
+      padding: 27px;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 12px 34px rgba(30, 91, 126, .075);
+      transition: box-shadow .2s ease, transform .2s ease;
+    }
+    .card:hover { box-shadow: 0 18px 42px rgba(30, 91, 126, .12); transform: translateY(-2px); }
+    .esphome { border-top: 4px solid #36bcf0; }
+    .matter { border-top: 4px solid #8d83e8; }
+    .heading { display: flex; align-items: center; gap: 15px; }
+    .glyph {
+      width: 60px; height: 60px; flex: 0 0 auto;
+      display: grid; place-items: center;
+      border-radius: 17px;
+      background: #edf9ff;
+    }
+    .matter .glyph { background: #f1efff; }
+    .glyph img { width: 46px; height: 46px; display: block; object-fit: contain; }
+    .matter .glyph img { width: 46px; height: 46px; }
+    h2 { font-size: 1.55rem; letter-spacing: -.025em; margin: 0; }
+    .subtitle { margin: 0; color: var(--muted); font-size: .88rem; }
+    .description { min-height: 68px; margin: 22px 0 16px; color: #50697c; font-size: .94rem; }
+    .hardware-note { color: var(--muted); font-size: .87rem; margin: 4px 0 0; }
+    .hardware-note strong { color: #35566b; }
+    .card-bottom { margin-top: auto; padding-top: 20px; }
+    .version-line { min-height: 25px; font-size: .85rem; color: #647c8e; margin-bottom: 10px; }
+    .state { margin: 11px 0 0; color: var(--muted); font-size: .83rem; min-height: 2.7em; }
+    .state.is-ready { color: #087e66; }
+    .state.is-error { color: #b94640; }
+    .flash-warning { color: #9e5c1b; font-size: .82rem; margin-top: 15px; }
+    .install-wrap { min-height: 52px; display: flex; align-items: center; }
+    esp-web-install-button { width: 100%; display: block; }
+    .install-action, .pending { display: block; width: 100%; text-align: center; border-radius: 13px; border: 0; padding: 13px 16px; font-weight: 750; min-height: 49px; }
+    .install-action { color: #ffffff; background: #0cad90; box-shadow: 0 5px 12px rgba(12, 173, 144, .16); }
+    .matter .install-action { background: #7068d4; color: #ffffff; box-shadow: 0 5px 12px rgba(112, 104, 212, .15); }
+    .install-action:hover { filter: brightness(1.045); }
+    .install-action:focus-visible { outline: 3px solid #8fcdf9; outline-offset: 3px; }
+    .pending { background: #edf3f8; color: #748899; cursor: not-allowed; }
+    .unsupported { color: #b94640; font-size: .88rem; }
+    .guide { margin-top: 26px; border: 1px solid var(--line); border-radius: 20px; background: rgba(255,255,255,.82); padding: 22px 25px; box-shadow: 0 6px 25px rgba(46, 106, 140, .045); }
+    .guide h3 { margin: 0 0 7px; font-size: 1.08rem; }
+    .guide p { color: var(--muted); margin: 8px 0; font-size: .92rem; }
+    .guide ol { margin: 6px 0 0; padding-left: 21px; color: #425d70; font-size: .92rem; }
+    .guide li { margin: 6px 0; }
+    footer { text-align: center; color: var(--muted); font-size: .85rem; margin-top: 30px; }
+    @media (max-width: 760px) {
+      main { padding: 31px 16px 48px; }
+      .cards { grid-template-columns: 1fr; }
+      .description { min-height: 0; }
+      .card { padding: 22px; }
+      .glyph { width: 54px; height: 54px; }
+    }
+    @media (prefers-reduced-motion: reduce) { .card { transition: none; } .card:hover { transform: none; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="brand">UNIVERSAL AC CONTROLLER Gen2</div>
+      <h1>Choose firmware to install</h1>
+      <p class="intro">Choose ESPHome or Matter firmware for the hardware.</p><p class="intro"> Plug the device into any of your computer's USB port to install directly in your browser.</p>
+    </header>
+    <div class="cards">
+      <section class="card esphome" aria-labelledby="esphome-title">
+        <div class="heading">
+          <div class="glyph" aria-hidden="true">
+            <img src="ha_logo.png" alt="" width="46" height="46">
+          </div>
+          <div><h2 id="esphome-title">ESPHome</h2><p class="subtitle">Home Assistant</p></div>
+        </div>
+        <p class="description">Dedicated to Home Assistant, best performance.</p>
+        <div class="card-bottom">
+          <div class="version-line" id="esphome-version" aria-live="polite">Firmware: checking…</div>
+          <div class="install-wrap">
+            <button type="button" class="pending" id="esphome-pending" disabled>Checking firmware…</button>
+            <esp-web-install-button id="esphome-install" hidden>
+              <button slot="activate" type="button" class="install-action">Connect &amp; Install ESPHome</button>
+              <span slot="unsupported" class="unsupported">Web Serial is not available in this browser. Try desktop Chrome or Edge.</span>
+              <span slot="not-allowed" class="unsupported">Open this installer via HTTPS or localhost.</span>
+            </esp-web-install-button>
+          </div>
+          <p id="esphome-status" class="state" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+      <section class="card matter" aria-labelledby="matter-title">
+        <div class="heading">
+          <div class="glyph" aria-hidden="true">
+            <img src="matter_logo.png" alt="" width="46" height="46">
+          </div>
+          <div><h2 id="matter-title">Matter</h2><p class="subtitle">Apple Home · Google Home · Alexa</p></div>
+        </div>
+        <p class="description">Cross platform compatibility. Natively & simultaneously work with Apple, Google and Alexa platform.</p>
+        <div class="card-bottom">
+          <div class="version-line" id="matter-version" aria-live="polite">Firmware: checking…</div>
+          <div class="install-wrap">
+            <button type="button" class="pending" id="matter-pending" disabled>Checking firmware…</button>
+            <esp-web-install-button id="matter-install" hidden>
+              <button slot="activate" type="button" class="install-action">Connect &amp; Install Matter</button>
+              <span slot="unsupported" class="unsupported">Web Serial is not available in this browser. Try desktop Chrome or Edge.</span>
+              <span slot="not-allowed" class="unsupported">Open this installer via HTTPS or localhost.</span>
+            </esp-web-install-button>
+          </div>
+          <p id="matter-status" class="state" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+    </div>
+    <section class="guide" aria-labelledby="instructions-title">
+      <h3 id="instructions-title">Tips:</h3>
+      <ol>
+        <li>For the very first installation, as there is no firmware on the board, you need to keep the button on board pressed while plugging it into the USB.</li>
+        <li>Use a browser with Web Serial support (Chrome or Edge recommended).</li>
+        <li>Click <strong>Connect &amp; Install</strong>, select the serial port and follow the installer prompts.</li>
+        <li>You may need to unplug the device and plug in again after downloading.</li>
+      </ol>
+      <p><strong>Note:</strong> No OTA is available at the moment, If you need to upgrade the firmware, you have to use this web installer again.</p>
+    </section>
+    <footer>Powered by <a href="https://esphome.github.io/esp-web-tools/" target="_blank" rel="noopener noreferrer">ESP Web Tools</a></footer>
+  </main>
+  <script>
+    "use strict";
+    // Two firmware categories for the same ESP32-C3 hardware.
+    // URLs are relative to firmware/index.html. Both manifests use one complete image at offset 0.
+    const firmware = {
+      esphome: { chip: "ESP32-C3", manifest: "esphome/manifest.json" },
+      matter:  { chip: "ESP32-C3", manifest: "matter/manifest.json" }
+    };
+
+    async function showFirmware(group) {
+      const item = firmware[group];
+      const installer = document.getElementById(`${group}-install`);
+      const pending = document.getElementById(`${group}-pending`);
+      const version = document.getElementById(`${group}-version`);
+      const status = document.getElementById(`${group}-status`);
+      installer.hidden = true;
+      installer.removeAttribute("manifest");
+      pending.hidden = false;
+      pending.textContent = "Checking firmware…";
+      version.textContent = "Firmware: checking…";
+      status.textContent = "";
+      status.className = "state";
+
+      try {
+        const manifestURL = new URL(item.manifest, document.baseURI);
+        const response = await fetch(manifestURL, { cache: "no-store" });
+        if (!response.ok) throw new Error("Firmware manifest is not published yet.");
+        const data = await response.json();
+        if (!data.name || !data.version || data.version === "0.0.0") {
+          throw new Error("Firmware version has not been published.");
+        }
+        const build = data.builds?.find(b => b.chipFamily === item.chip);
+        if (!build || !Array.isArray(build.parts) || build.parts.length !== 1 || build.parts[0].offset !== 0) {
+          throw new Error("Invalid manifest: expected one complete factory image at offset 0.");
+        }
+        const imageURL = new URL(build.parts[0].path, manifestURL);
+        if (imageURL.origin !== location.origin) throw new Error("Firmware must be hosted on this site.");
+        const binary = await fetch(imageURL, { method: "HEAD", cache: "no-store" });
+        if (!binary.ok) throw new Error("Firmware binary has not been uploaded yet.");
+        installer.setAttribute("manifest", manifestURL.href);
+        installer.hidden = false;
+        pending.hidden = true;
+        version.textContent = `Firmware version: ${data.version}`;
+        status.textContent = "Firmware ready. Connect your ESP32-C3 controller by USB.";
+        status.className = "state is-ready";
+      } catch (err) {
+        pending.textContent = "Firmware not published";
+        version.textContent = "Firmware: unavailable";
+        status.textContent = err instanceof Error ? err.message : String(err);
+        status.className = "state is-error";
+      }
+    }
+    showFirmware("esphome");
+    showFirmware("matter");
+  </script>
+</body>
+</html>
