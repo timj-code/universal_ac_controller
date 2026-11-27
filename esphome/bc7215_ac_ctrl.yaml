@@ -1,0 +1,182 @@
+substitutions:
+  bc7215_project_dir: "."
+  bc7215_library_dir: "../deps/bc7215_ac_lib"
+  project_version: "2.0.0"
+
+
+esphome:
+  name: bc7215-ac-ctrl
+  friendly_name: BC7215 AC CONTROLLER
+  name_add_mac_suffix: true
+  project:
+    name: "timj-code.bc7215_ac"
+    version: ${project_version}
+  includes:
+    # BC7215 C++ ESP-IDF wrappers
+    - ${bc7215_library_dir}/examples/ESP-IDF/components/bc7215/bc7215.cpp
+    - ${bc7215_library_dir}/examples/ESP-IDF/components/bc7215ac/bc7215ac.cpp
+
+    # BC7215 C library
+    - ${bc7215_library_dir}/bc7215_ac_lib/bc7215_lib.c
+    - ${bc7215_library_dir}/bc7215_ac_lib/bc7215_ac_lib.c
+
+    # C++ wrapper headers
+    - ${bc7215_library_dir}/examples/ESP-IDF/components/bc7215/include/bc7215.hpp
+    - ${bc7215_library_dir}/examples/ESP-IDF/components/bc7215ac/include/bc7215ac.hpp
+
+    # C library headers
+    - ${bc7215_library_dir}/bc7215_ac_lib/bc7215_lib.h
+    - ${bc7215_library_dir}/bc7215_ac_lib/bc7215_ac_lib.h
+    - ${bc7215_library_dir}/bc7215_ac_lib/bc7215_types.h
+
+    # Your ESP-IDF-specific BC7215 configuration
+    - ${bc7215_library_dir}/examples/ESP-IDF/main/include/bc7215_lib_config.h
+
+esp32:
+  variant: esp32c3
+  framework:
+    type: esp-idf
+
+external_components:
+  - source:
+      type: local
+      path: ${bc7215_project_dir}/components
+    components: [bc7215_ac]
+
+logger:
+
+api:
+  reboot_timeout: 0s
+
+ota:
+  platform: esphome
+
+# Provisioned WiFi: credentials are saved in flash by captive portal.
+# Do NOT set wifi.ssid/password here; fixed build-time credentials cannot
+# be erased by a button press and would reconnect after factory reset.
+wifi:
+  ap: {}
+  reboot_timeout: 0s
+
+captive_portal:
+
+# Optional USB serial provisioning, without using the BC7215 UART1.
+improv_serial:
+
+climate:
+  - platform: bc7215_ac
+    id: ac_controller
+    name: "AC"
+
+    bc7215_uart_num: 1
+    bc7215_tx_pin: GPIO4
+    bc7215_rx_pin: GPIO3
+    bc7215_busy_pin: GPIO5
+    bc7215_mod_pin: GPIO6
+
+    library_temperature_unit: C
+    status_led: bc7215_led_pwm
+
+    visual:
+      min_temperature: 16
+      max_temperature: 30
+      temperature_step: 1
+
+button:
+  # Start learning an optional user function (e.g. Swing/Sleep) in one step.
+  # Initial AC pairing and re-pairing use the GPIO9 physical single-click.
+  - platform: template
+    name: "Learn User Function"
+    on_press:
+      - lambda: |-
+          id(ac_controller).start_user_function_learning();
+
+  # Apply/restore the function that has already been learned.
+  - platform: template
+    name: "User Button"
+    on_press:
+      - lambda: |-
+          id(ac_controller).user_button();
+
+  # Only invoked after a confirmed >=5s physical-button hold.
+  - platform: factory_reset
+    id: erase_all_settings
+    internal: true
+
+# Physical button, wired to ground when pressed (GPIO9 pull-up).
+# GPIO9 is a boot strapping pin on ESP32-C3: verify the PCB does not hold it LOW at reset.
+binary_sensor:
+  - platform: gpio
+    id: bc7215_physical_button
+    internal: true
+    pin:
+      number: GPIO9
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    filters:
+      - delayed_on_off: 20ms
+    on_press:
+      - lambda: |-
+          id(ac_controller).physical_button_pressed();
+    on_release:
+      - if:
+          condition:
+            lambda: |-
+              return id(ac_controller).physical_button_released();
+          then:
+            - button.press: erase_all_settings
+    on_multi_click:
+      # Double-click: next protocol / built-in protocol.
+      - timing:
+          - ON for 50ms to 500ms
+          - OFF for 50ms to 350ms
+          - ON for 50ms to 500ms
+          - OFF for at least 200ms
+        then:
+          - lambda: |-
+              id(ac_controller).builtin_or_next();
+      # Single click: pairing / re-pairing.
+      - timing:
+          - ON for 50ms to 500ms
+          - OFF for at least 400ms
+        then:
+          - lambda: |-
+              id(ac_controller).start_pairing();
+
+# Low-active on-board LED: change inverted to false for an active-high LED.
+output:
+  - platform: ledc
+    id: bc7215_led_pwm
+    pin:
+      number: GPIO8
+      inverted: true
+    frequency: 1000Hz
+
+text_sensor:
+  - platform: template
+    name: "Status"
+    update_interval: 1s
+    lambda: |-
+      return {id(ac_controller).status_message()};
+
+# HDC2010 I2C interface
+i2c:
+  sda: GPIO7
+  scl: GPIO2
+  scan: true
+  frequency: 100kHz
+
+# HDC2010 temperature and humidity
+sensor:
+  - platform: hdc2010
+    address: 0x40
+    temperature:
+      name: "Temperature"
+    humidity:
+      name: "Humidity"
+    update_interval: 2s
+
+preferences:
+  flash_write_interval: 5s

@@ -16,11 +16,11 @@ Quick jump to:
 
 ## Introduction
 
-Thanks to so many of you who support my previous projects [Universal A/C IR Control For Home Assistant](https://github.com/timj-code/bc7215_ac_esphome) and [Matter Protocol Air Conditioner Controller for Any Brand](https://github.com/timj-code/bc7215_ac_matter) , they have over 250 stars on Github in total to the time this article was written. Finally I decide to take it one step further to make a dedicated PCB for it so it can be much easier to use and works much better as it has better WiFi reception and 360° IR radiation. A temperature/humidity sensor was added too so you can also see real time environment readings.
+Thanks to so many of you who support my previous projects [Universal A/C IR Control For Home Assistant](https://github.com/timj-code/bc7215_ac_esphome) and [Matter Protocol Air Conditioner Controller for Any Brand](https://github.com/timj-code/bc7215_ac_matter) , they have over 350 stars on Github in total at the time this article was written. Finally I decide to take it one step further to make a dedicated PCB for it so it can be much easier to use and works much better as it has better WiFi reception and 360° IR emitting. A temperature/humidity sensor is added too so you can also see real time environment readings.
 
 ![Generation2](./img/esp32-bc7215-gen2.jpg)
 
-2 firmware options to make it work with all the platforms natively :
+**1 device works natively with all the platforms, no bridge required :**
 
 ![Platform & Apps](./img/AC-Apps.jpg)
 
@@ -28,8 +28,9 @@ I'll keep the whole project open sourced, **both software and hardware!** PCB de
 
 ## Key Features
 
-- **USB thumb sized, 360° IR emitting**
-- **Plug-n-Play for Home Assistant & Matter (Apple Home Kit, Google Home, Alexa)**
+- **Offline support for 1200+ AC brands world wide, thousands of models** [full brand list](https://github.com/bitcode-tech/bc7215_ac_lib/blob/master/docs/supported_ac_brand_list_en.pdf)
+- **Plug into any USB port (charger) and go, 360° IR emitting**
+- **Natively work with Home Assistant, Apple Home Kit, Google Home,  Alexa, Aqara & Tuya**
 - **Temperature & Humidity Sensor**
 - **No App installation, No account registration**
 - **One-press pairing with all AC brands and models**
@@ -38,7 +39,7 @@ I'll keep the whole project open sourced, **both software and hardware!** PCB de
 
 ## Duo Firmware
 
-The project provides 2 firmware options: ESPHome version for Home Assistant and Matter version for broad compatibility that works with all platforms: Home Assistant, Apple Home, Google Home, and Alexa.
+The project provides 2 firmware options: ESPHome version for Home Assistant and Matter version for broad compatibility that works with all platforms: Home Assistant, Apple Home, Google Home, Alexa, Aqara and Tuya.
 
 ESPHome version has most complecated features and will work seamlessly with Home Assistant, but need user to have Home Assistant environment setup at home. Although the Matter version can also work with Home Assistant, if you already have HA at home, it's strongly suggested to use the ESPHome version.
 
@@ -46,26 +47,31 @@ Matter is a new IoT protocol aims to work across different brands and platforms,
 
 #### Matter Protocol Limitations
 
-| Item                   | Conventional Split-System Air Conditioner                    | Matter Protocol                                              |
-| ---------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| Temperature control    | A single target temperature                                  | Separate cooling and heating target temperatures. In Auto mode in particular, a temperature range is set instead of a single target temperature. |
-| Temperature resolution | Usually 1°C. The AC control library used in this project also supports integer temperatures only. | The device cannot specify the temperature adjustment step through the protocol. Apple, Google & Alexa currently all use 0.5°C as the minimum adjustment step. |
-| Fan control            | Usually four levels: Auto, High, Medium, and Low             | The protocol supports both discrete fan levels and percentage-based control, but smartphone vendors currently appear to support only percentage-based fan adjustment. |
+| Item                   | Conventional Split-System Air Conditioner                                                         | Matter Protocol                                                                                                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Temperature control    | A single target temperature                                                                       | Separate cooling and heating target temperatures. In Auto mode in particular, a temperature range is set instead of a single target temperature.                      |
+| Temperature resolution | Usually 1°C. The AC control library used in this project also supports integer temperatures only. | The device cannot specify the temperature adjustment step through the protocol. Apple, Google & Alexa currently all use 0.5°C as the minimum adjustment step.         |
+| Fan control            | Usually four levels: Auto, High, Medium, and Low                                                  | The protocol supports both discrete fan levels and percentage-based control, but smartphone vendors currently appear to support only percentage-based fan adjustment. |
 
 Further more, the user experience of a Matter device is platform specific. Matter is just a communication protocol but how and to what degree it's implemented is the choice of vendor. You'll have different user interfaces on your iPhone and Android, even different features. For example, in Apple Home, environment humidity will not be shown at all.
 
-You have the option to install either of the ESPHome or Matter version, and you can switch between them at any time. Choose your best fit. Below is a comparison table of the 2 systems and different platforms:
+You have the option to install either of the ESPHome or Matter version, and you can re-flash the device to switch between them at any time. Choose your best fit. Below is a comparison table of the 2 systems and different platforms:
 
-| Platform                                                     | ESPHome Version                                              | Matter Version                                               |
-| ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| Requirements                                                 | 2.4GHz Wifi, Home Assistant setup                            | 2.4GHz WiFi, IPV6 enabled on LAN                             |
-| Home Assistant                                               | Native support, best performance, extra user defined button to control a function of your choice (such as swing), works locally & remotely | Matter plug-in must be installed, Heating & Cooling mode only, works locally & remotely |
-| iPhone alone                                                 | n/a                                                          | Works with Apple Home, Siri, controls your AC locally,(Phone must be at home) |
-| iPhone with Home Pod or Apple TV                             | n/a                                                          | Can control your AC remotely                                 |
-| Android phone alone                                          | n/a                                                          | n/a                                                          |
-| Android phone with Google Nest devices                       | n/a                                                          | Works with Google Home, Google Assistant, Controls your AC locally & remotely |
-| Android phone with Alexa devices                             | n/a                                                          | Works with Alexa, controls your AC locally & remotely        |
-| Phone with other IoT platforms such as Tuya, Aqara and Xiaomi | n/a                                                          | No AC support over Matter protocol so far                    |
+| Platform                               | ESPHome Version                                                                                                                            | Matter Version                                                                          |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| Requirements                           | 2.4GHz Wifi, Home Assistant setup                                                                                                          | 2.4GHz WiFi, IPV6 enabled on LAN                                                        |
+| Home Assistant                         | Native support, best performance, extra user defined button to control a function of your choice (such as swing), works locally & remotely | Matter plug-in must be installed, Heating & Cooling mode only, works locally & remotely |
+| iPhone alone                           | n/a                                                                                                                                        | Works with Apple Home, Siri, controls your AC locally,(Phone must be at home)           |
+| iPhone with Home Pod or Apple TV       | n/a                                                                                                                                        | Can control your AC remotely                                                            |
+| Android phone alone                    | n/a                                                                                                                                        | n/a                                                                                     |
+| Android phone with Google Nest devices | n/a                                                                                                                                        | Works with Google Home, Google Assistant, Controls your AC locally & remotely           |
+| Phone with Alexa devices               | n/a                                                                                                                                        | Works with Alexa, controls your AC locally & remotely                                   |
+| Phone with Aqara App along             | n/a                                                                                                                                        | n/a                                                                                     |
+| Phone with Aqara  App + Aqara Hub      | n/a                                                                                                                                        | Works with Aqara, locally & remotely                                                    |
+| Phone with Tuya App                    | n/a                                                                                                                                        | Works with Tuya locally, no fan control, environment temp not shown correctly           |
+| Phone with Tuya App + Tuya Hub         | n/a                                                                                                                                        | Works with Tuya locally & remotely                                                      |
+
+** Other platforms have not been tested. If you have tested this device with other platforms such as Samsung, please let me know the result.
 
 ## PCB Design Files
 
@@ -77,6 +83,8 @@ As an open source hardware, schematics including part numbers and PCB layout fil
 
 1. ### Web Install (Recommended)
 
+   ![](./img/web_installer.png)
+
    A web installer is setup with Github Pages, Plug this device in your computer and firmware can be installed using your web browser. On the page you can choose which firmware you would install.
 
    For the very first install, as there is no firmware present, you will need to hold the button pressed while plugging in, once any version of the firmware has been installed, downloading can be done without pushing the button.
@@ -84,25 +92,23 @@ As an open source hardware, schematics including part numbers and PCB layout fil
    ##### [Web Installer Page](https://timj-code.github.io/universal_ac_controller)
 
 2. ### Clone and Compile (Custom code)
-   
+
    This method allows you to modify the code to suit your special needs. 
-   
+
    #### Step 1: Clone the project
-   
+
    Because this project relies on git submodules (the AC control library and examples from [BC7215A Offline Air Conditioner Control Library](https://github.com/bitcode-tech/bc7215_ac_lib), **do not download it as a ZIP file**. You must use the `git clone --recursive` command to fetch all required dependencies:
-   
+
    `git clone --recursive https://github.com/timj-code/universal_ac_controller.git`
-   
+
    #### Step 2: Compile & Install
-   
+
    Go to the `esphome` or `matter` folder to compile, assuming you already have the ESPHome or ESP-IDF Matter SDK installed.
-   
+
    For ESPHome:  `esphome compile bc7215_ac_control.yaml`
-   
+
    for Matter: `idf.py build`
-   
-   
-   
+
 ## Setup
 
 Whether for ESPHome or Matter version, there are 2 things need to be setup: 
@@ -114,7 +120,7 @@ Whether for ESPHome or Matter version, there are 2 things need to be setup:
 
 The method is unified for both the ESPHome and Matter version, and it's extremely simple: 
 
-1.  Press the button on device, the blue LED will start blink quickly
+1. Press the button on device, the blue LED will start blink quickly
 2. With the original IR remote set to "Cooling mode, 25°C", press "Fan Speed" button towards this device, the LED will stop fast blinking, meaning the pairing is done.
 
 This simple operation will pair 99% of the ACs on market, If your AC falls in the 1%, see below for the advanced pairing method.
@@ -127,7 +133,9 @@ This part is different for ESPHome and Matter.
 
 #### ESPHome
 
-You'll need to let the device connect to your WiFi. At power up, if the WiFi connection is not configured yet, the device will enter AP mode. Using your phone, search WiFi hotspot named "BC7215_AC_CONTROLLER-xxxxx" and connect to it, the hotspot doesn't have password, once connected, just follow the screen prompt to choose which WiFi to connect and setup the WiFi password.
+After downloading, you'll see prompt to setup WiFi connection in your browser. If that didn't work for any reason, a drop back method is to use the device's WiFi hot spot. 
+
+At power up, if the WiFi connection is not configured yet, the device will enter AP mode. Using your phone, search WiFi hotspot named "BC7215_AC_CONTROLLER-xxxxx" and connect to it, the hotspot doesn't have password, once connected, just follow the screen prompt to choose which WiFi to connect and setup the WiFi password.
 
 #### Matter
 
@@ -199,16 +207,22 @@ The user button let you to record an extra IR frame with the desired control inf
 
 **Red LED**: IR transmitting indicator
 
-| Blue LED Behaviour           | Meaning                                                      |
-| ---------------------------- | ------------------------------------------------------------ |
-| Steadily on                  | Factory state; the device has not yet been configured.       |
-| Steadily off                 | Not powered or button double clicked (see above)             |
-| Rapid flashing               | Waiting to receive an infrared signal for air conditioner pairing. |
-| Slow flashing                | Establishing a network connection.                           |
-| One short flash per second   | The network is configured, but the air conditioner has not yet been paired. |
+| Blue LED Behaviour           | Meaning                                                                             |
+| ---------------------------- | ----------------------------------------------------------------------------------- |
+| Steadily on                  | Factory state; the device has not yet been configured.                              |
+| Steadily off                 | Not powered or button double clicked (see above)                                    |
+| Rapid flashing               | Waiting to receive an infrared signal for air conditioner pairing.                  |
+| Slow flashing                | Establishing a network connection.                                                  |
+| One short flash per second   | The network is configured, but the air conditioner has not yet been paired.         |
 | Two short flashes per second | The air conditioner is paired and the device is waiting to be connected to network. |
-| Breathing                    | Pairing and connection are complete; the device is in standby mode. |
+| Breathing                    | Pairing and connection are complete; the device is in standby mode.                 |
 
 ## Online Shop
 
-(the shop is still under construction)
+eBay: https://ebay.io/m/6YApll
+
+Taobao: https://item.taobao.com/item.htm?ft=t&id=1101425747193
+
+Tindie: https://www.tindie.com/products/44816/
+
+Australian & NZ orders will be shipped from Australia, other orders will ship from China.

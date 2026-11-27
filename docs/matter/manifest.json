@@ -1,6 +1,6 @@
 {
   "name": "BC7215 AC Matter",
-  "version": "0.0.0",
+  "version": "2.0.0",
   "new_install_prompt_erase": false,
   "builds": [
     {

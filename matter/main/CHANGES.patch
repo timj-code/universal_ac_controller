@@ -1,0 +1,650 @@
+--- a/app_driver.cpp
++++ b/app_driver.cpp
+@@ -22,6 +22,10 @@
+ #include <bc7215ac.hpp>
+ #include <driver/gpio.h>
+ #include <driver/uart.h>
++#include <driver/ledc.h>
++#include <driver/i2c_master.h>
++#include <algorithm>
++#include <cstdint>
+ #include <esp_timer.h> // ESP software timer API
+ #include <nvs.h>
+ #include <nvs_flash.h>
+@@ -29,6 +33,19 @@
+ #include <freertos/task.h>
+ #include <freertos/queue.h>
+ #include <platform/CHIPDeviceLayer.h>
++#include <platform/PlatformManager.h>
++
++// ESP-Matter v1.6+ may use a code-driven humidity cluster. In that
++// implementation attribute::report() alone may only change a legacy cache.
++#if __has_include(<app/clusters/relative-humidity-measurement-server/CodegenIntegration.h>)
++#include <app/clusters/relative-humidity-measurement-server/CodegenIntegration.h>
++#define BC7215_HUMIDITY_CODE_DRIVEN 1
++#elif __has_include("data_model_provider/clusters/relative_humidity_measurement/integration.h")
++#include "data_model_provider/clusters/relative_humidity_measurement/integration.h"
++#define BC7215_HUMIDITY_CODE_DRIVEN 1
++#else
++#define BC7215_HUMIDITY_CODE_DRIVEN 0
++#endif
+ 
+ using namespace chip::app::Clusters;
+ using namespace esp_matter;
+@@ -64,6 +81,7 @@
+ enum class led_normal_type_t : uint8_t {
+     STATIC,
+     PERIODIC,
++    BREATH,
+ };
+ 
+ enum class led_command_type_t : uint8_t {
+@@ -71,6 +89,7 @@
+     SET_PERIODIC,
+     ONE_SHOT,
+     CANCEL_ONE_SHOT,
++    SET_BREATH,
+ };
+ 
+ enum class led_phase_t : uint8_t {
+@@ -80,6 +99,7 @@
+     NORMAL_INTERVAL,
+     ONE_SHOT_ON,
+     ONE_SHOT_OFF,
++    BREATH,
+ };
+ 
+ struct led_pattern_t {
+@@ -104,13 +124,51 @@
+ static QueueHandle_t s_led_command_queue = nullptr;
+ static TaskHandle_t s_led_task_handle = nullptr;
+ 
++static constexpr ledc_mode_t LED_PWM_MODE = LEDC_LOW_SPEED_MODE;
++static constexpr ledc_timer_t LED_PWM_TIMER = LEDC_TIMER_0;
++static constexpr ledc_channel_t LED_PWM_CHANNEL = LEDC_CHANNEL_0;
++static constexpr uint32_t LED_PWM_MAX_DUTY = (1U << 13) - 1;
++static bool s_led_pwm_ready = false;
++
++static esp_err_t app_driver_led_pwm_init()
++{
++    ledc_timer_config_t timer{};
++    timer.speed_mode = LED_PWM_MODE;
++    timer.timer_num = LED_PWM_TIMER;
++    timer.duty_resolution = LEDC_TIMER_13_BIT;
++    timer.freq_hz = 1000;
++    timer.clk_cfg = LEDC_AUTO_CLK;
++    esp_err_t err = ledc_timer_config(&timer);
++    if (err != ESP_OK) return err;
++
++    ledc_channel_config_t channel{};
++    channel.gpio_num = SUPER_MINI_LED_GPIO;
++    channel.speed_mode = LED_PWM_MODE;
++    channel.channel = LED_PWM_CHANNEL;
++    channel.intr_type = LEDC_INTR_DISABLE;
++    channel.timer_sel = LED_PWM_TIMER;
++    channel.duty = SUPER_MINI_LED_ACTIVE_LOW ? LED_PWM_MAX_DUTY : 0;
++    channel.hpoint = 0;
++    err = ledc_channel_config(&channel);
++    if (err == ESP_OK) s_led_pwm_ready = true;
++    return err;
++}
++
++static void app_driver_led_brightness(float level)
++{
++    if (!s_led_pwm_ready) return;
++    level = std::max(0.0f, std::min(1.0f, level));
++    // GPIO8 on the SUPER MINI is active LOW; 0% PWM duty means ON.
++    const float duty_fraction = SUPER_MINI_LED_ACTIVE_LOW ? (1.0f - level) : level;
++    const uint32_t duty = static_cast<uint32_t>(duty_fraction * LED_PWM_MAX_DUTY);
++    if (ledc_set_duty(LED_PWM_MODE, LED_PWM_CHANNEL, duty) == ESP_OK) {
++        ledc_update_duty(LED_PWM_MODE, LED_PWM_CHANNEL);
++    }
++}
++
+ static void app_driver_led_write(bool on)
+ {
+-    const int gpio_level = SUPER_MINI_LED_ACTIVE_LOW
+-        ? (on ? 0 : 1)
+-        : (on ? 1 : 0);
+-
+-    gpio_set_level(SUPER_MINI_LED_GPIO, gpio_level);
++    app_driver_led_brightness(on ? 1.0f : 0.0f);
+ }
+ 
+ static TickType_t app_driver_led_ms_to_ticks(uint32_t ms)
+@@ -176,6 +234,7 @@
+     uint8_t completed_flashes = 0;
+     bool one_shot_active = false;
+     TickType_t wait_ticks = portMAX_DELAY;
++    int64_t breath_start_us = 0;
+ 
+     app_driver_led_write(false);
+ 
+@@ -186,6 +245,14 @@
+             phase = led_phase_t::STATIC;
+             app_driver_led_write(normal_state.static_on);
+             wait_ticks = portMAX_DELAY;
++            return;
++        }
++
++        if (normal_state.type == led_normal_type_t::BREATH) {
++            phase = led_phase_t::BREATH;
++            breath_start_us = esp_timer_get_time();
++            app_driver_led_brightness(0.0f);
++            wait_ticks = app_driver_led_ms_to_ticks(30);
+             return;
+         }
+ 
+@@ -238,6 +305,11 @@
+                     one_shot_active = false;
+                     start_normal_display();
+                     break;
++
++                case led_command_type_t::SET_BREATH:
++                    normal_state.type = led_normal_type_t::BREATH;
++                    if (!one_shot_active) start_normal_display();
++                    break;
+             }
+ 
+             continue;
+@@ -245,6 +317,16 @@
+ 
+         // Timeout: advance the currently displayed sequence by one phase.
+         switch (phase) {
++            case led_phase_t::BREATH: {
++                constexpr float PI = 3.14159265358979323846f;
++                constexpr float CYCLE_US = 3000000.0f;
++                const int64_t elapsed_us = esp_timer_get_time() - breath_start_us;
++                const float t = static_cast<float>(elapsed_us % 3000000) / CYCLE_US;
++                const float brightness = 0.5f - 0.5f * cosf(2.0f * PI * t);
++                app_driver_led_brightness(brightness);
++                wait_ticks = app_driver_led_ms_to_ticks(30);
++                break;
++            }
+             case led_phase_t::STATIC:
+                 wait_ticks = portMAX_DELAY;
+                 break;
+@@ -308,6 +390,12 @@
+         return ESP_OK;
+     }
+ 
++    esp_err_t pwm_err = app_driver_led_pwm_init();
++    if (pwm_err != ESP_OK) {
++        ESP_LOGE(TAG, "LEDC init failed: %s", esp_err_to_name(pwm_err));
++        return pwm_err;
++    }
++
+     s_led_command_queue = xQueueCreate(8, sizeof(led_command_t));
+     if (s_led_command_queue == nullptr) {
+         ESP_LOGE(TAG, "Failed to create LED command queue");
+@@ -409,6 +497,13 @@
+     return app_driver_led_send_command(command);
+ }
+ 
++static esp_err_t app_driver_led_set_breath()
++{
++    led_command_t command{};
++    command.type = led_command_type_t::SET_BREATH;
++    return app_driver_led_send_command(command);
++}
++
+ static esp_err_t app_driver_led_cancel_one_shot()
+ {
+     const led_command_t command{
+@@ -448,8 +543,8 @@
+             break;
+ 
+         case LED_MODE_BREATH_3S:
+-            // One short flash every 3 seconds: ON 100 ms, OFF 100 ms.
+-            err = app_driver_led_set_periodic(1, 100, 100, 3000);
++            // True 3-second PWM brightness cycle (rather than a single flash).
++            err = app_driver_led_set_breath();
+             break;
+ 		case ONE_SHOT_FLASH_3X:
+ 			err = app_driver_led_one_shot(3, 100, 200);
+@@ -458,10 +553,12 @@
+ 			err = app_driver_led_one_shot(1, 1000, 1000);
+ 			break;
+ 		case LED_MODE_BLINK_2X_1HZ:
+-			err = app_driver_led_set_periodic(2, 100, 100, 1000);
++            // Two short flashes every 2 seconds.
++			err = app_driver_led_set_periodic(2, 100, 150, 2000);
+ 			break;
+ 		case LED_MODE_BLINK_1X_1HZ:
+-			err = app_driver_led_set_periodic(1, 100, 100, 1000);
++            // One short flash every 2 seconds.
++			err = app_driver_led_set_periodic(1, 100, 100, 2000);
+ 			break;
+     }
+ 
+@@ -827,15 +924,8 @@
+         }
+     }
+ 
+-    esp_err_t local_err =
+-        app_matter_update_display_temperature(
+-            temp_x100);
+-
+-    if (local_err != ESP_OK &&
+-        first_error == ESP_OK) {
+-        first_error = local_err;
+-    }
+-
++    // Do NOT overwrite LocalTemperature with the target setpoint.
++    // It is now exclusively supplied by the HDC2010 sensor.
+     return first_error;
+ }
+ 
+@@ -860,6 +950,163 @@
+     );
+ }
+ 
++
++/*
++ * HDC2010 environment monitor. Hardware matches the ESPHome 1.7.2 design:
++ * SDA=GPIO7, SCL=GPIO2, 100 kHz, 7-bit address 0x40.
++ * A FreeRTOS task reads the sensor every 2 seconds. Only the Matter thread
++ * updates attributes; the worker never calls attribute::report directly.
++ */
++static constexpr gpio_num_t HDC2010_SDA = GPIO_NUM_7;
++static constexpr gpio_num_t HDC2010_SCL = GPIO_NUM_2;
++static constexpr uint16_t HDC2010_ADDRESS = 0x40;
++static constexpr int HDC2010_SAMPLE_PERIOD_MS = 2000;
++static i2c_master_bus_handle_t s_hdc2010_bus = nullptr;
++static i2c_master_dev_handle_t s_hdc2010_dev = nullptr;
++static TaskHandle_t s_hdc2010_task = nullptr;
++static std::atomic<int16_t> s_hdc2010_temp_x100{0};
++static std::atomic<uint16_t> s_hdc2010_rh_x100{0};
++static std::atomic_bool s_hdc2010_valid{false};
++
++static esp_err_t app_driver_hdc2010_read_reg(uint8_t reg, uint8_t *dst, size_t size)
++{
++    return i2c_master_transmit_receive(s_hdc2010_dev, &reg, 1, dst, size, 100);
++}
++
++static esp_err_t app_driver_hdc2010_initialize()
++{
++    i2c_master_bus_config_t bus{};
++    bus.i2c_port = I2C_NUM_0;
++    bus.sda_io_num = HDC2010_SDA;
++    bus.scl_io_num = HDC2010_SCL;
++    bus.clk_source = I2C_CLK_SRC_DEFAULT;
++    bus.glitch_ignore_cnt = 7;
++    bus.flags.enable_internal_pullup = true;
++
++    esp_err_t err = i2c_new_master_bus(&bus, &s_hdc2010_bus);
++    if (err != ESP_OK) return err;
++
++    i2c_device_config_t dev{};
++    dev.dev_addr_length = I2C_ADDR_BIT_LEN_7;
++    dev.device_address = HDC2010_ADDRESS;
++    dev.scl_speed_hz = 100000;
++    err = i2c_master_bus_add_device(s_hdc2010_bus, &dev, &s_hdc2010_dev);
++    if (err != ESP_OK) return err;
++
++    uint8_t id[2]{};
++    err = app_driver_hdc2010_read_reg(0xFE, id, sizeof(id));
++    if (err != ESP_OK) return err;
++    const uint16_t device_id = static_cast<uint16_t>(id[0]) |
++                                (static_cast<uint16_t>(id[1]) << 8);
++    if (device_id != 0x07D0) {
++        ESP_LOGE(TAG, "HDC2010 unexpected device ID: 0x%04X", device_id);
++        return ESP_ERR_NOT_FOUND;
++    }
++    ESP_LOGI(TAG, "HDC2010 ready: address=0x40 SDA=7 SCL=2 ID=0x%04X", device_id);
++    return ESP_OK;
++}
++
++static esp_err_t app_driver_hdc2010_measure(int16_t &temperature_x100, uint16_t &humidity_x100)
++{
++    // Register 0x0F: MEAS_CONF=00 (temperature+humidity), TRIG=1.
++    const uint8_t trigger[] = {0x0F, 0x01};
++    esp_err_t err = i2c_master_transmit(s_hdc2010_dev, trigger, sizeof(trigger), 100);
++    if (err != ESP_OK) return err;
++    vTaskDelay(pdMS_TO_TICKS(20));
++
++    // Registers 0x00..0x03: temperature L/H, humidity L/H.
++    uint8_t bytes[4]{};
++    err = app_driver_hdc2010_read_reg(0x00, bytes, sizeof(bytes));
++    if (err != ESP_OK) return err;
++    const uint16_t raw_temp = static_cast<uint16_t>(bytes[0]) |
++                              (static_cast<uint16_t>(bytes[1]) << 8);
++    const uint16_t raw_rh = static_cast<uint16_t>(bytes[2]) |
++                            (static_cast<uint16_t>(bytes[3]) << 8);
++    // TI conversion: T (°C) = raw * 165 / 65536 - 40; RH (%) = raw * 100 / 65536.
++    const float t = static_cast<float>(raw_temp) * 165.0f / 65536.0f - 40.0f;
++    const float rh = static_cast<float>(raw_rh) * 100.0f / 65536.0f;
++    if (t < -40.0f || t > 125.0f || rh < 0.0f || rh > 100.0f) {
++        return ESP_ERR_INVALID_RESPONSE;
++    }
++    temperature_x100 = static_cast<int16_t>(std::lround(t * 100.0f));
++    humidity_x100 = static_cast<uint16_t>(std::lround(rh * 100.0f));
++    return ESP_OK;
++}
++
++static void app_driver_hdc2010_report_on_matter_thread(intptr_t arg)
++{
++    (void)arg;
++    if (!s_hdc2010_valid.load() || room_air_conditioner_endpoint_id == 0) return;
++    const int16_t temperature = s_hdc2010_temp_x100.load();
++    const uint16_t humidity = s_hdc2010_rh_x100.load();
++
++    // Unlike setpoints, local temperature must remain the actual room reading.
++    app_matter_update_display_temperature(temperature);
++
++#if BC7215_HUMIDITY_CODE_DRIVEN
++    // Modern esp-matter stores RelativeHumidityMeasurement in a code-driven
++    // cluster rather than the legacy attribute cache; this method updates
++    // the real cluster and triggers subscriptions.
++    CHIP_ERROR chip_err = chip::app::Clusters::RelativeHumidityMeasurement::SetMeasuredValue(
++        room_air_conditioner_endpoint_id,
++        chip::app::DataModel::MakeNullable<uint16_t>(humidity));
++    if (chip_err != CHIP_NO_ERROR) {
++        ESP_LOGE(TAG, "Humidity code-driven update failed: %" CHIP_ERROR_FORMAT, chip_err.Format());
++    }
++#else
++    // Legacy ESP-Matter data model path (e.g. release/v1.4.x).
++    esp_matter_attr_val_t value = esp_matter_nullable_uint16(nullable<uint16_t>(humidity));
++    esp_err_t err = attribute::report(
++        room_air_conditioner_endpoint_id,
++        RelativeHumidityMeasurement::Id,
++        RelativeHumidityMeasurement::Attributes::MeasuredValue::Id,
++        &value);
++    if (err != ESP_OK) {
++        ESP_LOGE(TAG, "Humidity report failed: %s", esp_err_to_name(err));
++    }
++#endif
++    ESP_LOGI(TAG, "HDC2010: %.2f C, %.2f %%RH", temperature / 100.0f, humidity / 100.0f);
++}
++
++static void app_driver_hdc2010_task(void *arg)
++{
++    (void)arg;
++    for (;;) {
++        int16_t t = 0;
++        uint16_t h = 0;
++        const esp_err_t err = app_driver_hdc2010_measure(t, h);
++        if (err == ESP_OK) {
++            s_hdc2010_temp_x100.store(t);
++            s_hdc2010_rh_x100.store(h);
++            s_hdc2010_valid.store(true);
++            CHIP_ERROR schedule_err = chip::DeviceLayer::PlatformMgr().ScheduleWork(
++                app_driver_hdc2010_report_on_matter_thread, 0);
++            if (schedule_err != CHIP_NO_ERROR) {
++                ESP_LOGE(TAG, "Could not schedule HDC2010 report: %" CHIP_ERROR_FORMAT,
++                         schedule_err.Format());
++            }
++        } else {
++            ESP_LOGW(TAG, "HDC2010 measurement failed: %s", esp_err_to_name(err));
++        }
++        vTaskDelay(pdMS_TO_TICKS(HDC2010_SAMPLE_PERIOD_MS));
++    }
++}
++
++esp_err_t app_driver_environment_sensor_start()
++{
++    if (s_hdc2010_task) return ESP_OK;
++    esp_err_t err = app_driver_hdc2010_initialize();
++    if (err != ESP_OK) {
++        ESP_LOGE(TAG, "HDC2010 initialization failed: %s", esp_err_to_name(err));
++        return err;
++    }
++    if (xTaskCreate(app_driver_hdc2010_task, "hdc2010", 4096, nullptr, 4,
++                    &s_hdc2010_task) != pdPASS) {
++        ESP_LOGE(TAG, "Cannot create HDC2010 task");
++        return ESP_ERR_NO_MEM;
++    }
++    return ESP_OK;
++}
+ 
+ static uint8_t app_driver_bc7215_mode_to_matter(int mode)
+ {
+@@ -1152,20 +1399,7 @@
+                     OccupiedHeatingSetpoint::Id,
+                 &setpoint_val));
+ 
+-        esp_matter_attr_val_t local_temp =
+-            esp_matter_invalid(nullptr);
+-        local_temp.type =
+-            ESP_MATTER_VAL_TYPE_NULLABLE_INT16;
+-        local_temp.val.i16 = temp_x100;
+-
+-        app_matter_log_update_error(
+-            "LocalTemperature",
+-            attribute::update(
+-                room_air_conditioner_endpoint_id,
+-                Thermostat::Id,
+-                Thermostat::Attributes::
+-                    LocalTemperature::Id,
+-                &local_temp));
++        // Do not update LocalTemperature from IR parsing: HDC2010 owns it.
+     }
+ 
+     const uint8_t matter_fan_mode =
+@@ -1379,8 +1613,7 @@
+ 
+     app_driver_bc7215_alt_reset_tracking();
+     app_driver_led_cancel_one_shot();
+-    app_driver_led_set_mode(
+-        LED_MODE_BREATH_3S);
++    app_driver_update_led_states();
+ 
+     ESP_LOGI(
+         TAG_BC7215,
+@@ -2791,7 +3024,7 @@
+ 			     * After the current write completes, synchronize:
+ 			     * CoolingSetpoint
+ 			     * HeatingSetpoint
+-			     * LocalTemperature
++			     * LocalTemperature is updated separately by HDC2010.
+ 			     */
+ 			    app_matter_schedule_report_all_temperatures(rounded_temp);
+ 
+@@ -3245,8 +3478,8 @@
+     if (led_err != ESP_OK) {
+         ESP_LOGE(TAG, "LED controller init failed: %s", esp_err_to_name(led_err));
+     } else {
+-        // Unpaired: blink at 1 Hz. After pairing, switch to one short flash every 3 seconds.
+-        app_driver_led_set_mode(LED_MODE_BLINK_1HZ);
++        // Until the Matter stack starts, use a provisional unconfigured state.
++        app_driver_led_set_mode(LED_MODE_ON);
+     }
+ 
+     /* Initialize BC7215AC hardware */
+@@ -3266,8 +3499,8 @@
+         }
+ 
+         if (s_bc7215_paired.load()) {
+-            app_driver_led_set_mode(
+-                LED_MODE_BREATH_3S);
++            // Network not yet commissioned: two short blinks every 2s.
++            app_driver_led_set_mode(LED_MODE_BLINK_2X_1HZ);
+         }
+     }
+ 
+@@ -3338,71 +3571,36 @@
+ 
+ void app_driver_update_led_states()
+ {
+-	app_matter_state_t matter_state;
+-
+-    /*
+-     * Factory-reset indication has priority over pairing/network states.
+-     */
+-    if (s_factory_reset_in_progress.load()) {
+-        app_driver_led_set_mode(
+-            LED_MODE_BLINK_3HZ);
++    // Priority: hold-to-reset > protocol traversal > IR learning > network > normal.
++    if (s_factory_reset_in_progress.load() || s_factory_reset_armed.load()) {
++        app_driver_led_set_mode(LED_MODE_BLINK_3HZ);
+         return;
+     }
+-
+-    if (s_factory_reset_armed.load()) {
+-        app_driver_led_set_mode(
+-            LED_MODE_BLINK_3HZ);
+-        return;
+-    }
+-
+     if (s_bc7215_alt_traversal_active.load()) {
+         app_driver_led_set_static(false);
+         return;
+     }
+-
+-	matter_state = app_get_matter_state_locked();
+-
+-	if (!s_bc7215_paired.load() &&
+-        matter_state == app_matter_state_t::NOT_COMMISSIONED) {
+-		app_driver_led_set_mode(LED_MODE_ON);
+-		return;
+-	}
+-
+-	if ((matter_state == app_matter_state_t::COMMISSIONING) || 
+-		(matter_state == app_matter_state_t::COMMISSIONED_OFFLINE)  ||
+-		(matter_state == app_matter_state_t::CONNECTED_NO_SUBSCRIPTION ))  {
+-		
+-		app_driver_led_set_mode(LED_MODE_BLINK_1HZ);
+-		return;
+-	}
+-
+-	if (s_bc7215_pairing.load()) {
+-		app_driver_led_set_mode(LED_MODE_BLINK_3HZ);
++    if (s_bc7215_pairing.load()) {
++        app_driver_led_set_mode(LED_MODE_BLINK_3HZ);
+         return;
+-	}	
+-
+-    if (!s_bc7215_paired.load() &&
+-        matter_state == app_matter_state_t::SUBSCRIBED) {
+-
+-        app_driver_led_set_mode(
+-            LED_MODE_BLINK_1X_1HZ);
++    }
++
++    const app_matter_state_t state = app_get_matter_state_locked();
++    const bool paired = s_bc7215_paired.load();
++
++    // No Matter fabric: distinguish IR pairing status.
++    if (state == app_matter_state_t::NOT_COMMISSIONED) {
++        app_driver_led_set_mode(paired ? LED_MODE_BLINK_2X_1HZ : LED_MODE_ON);
+         return;
+     }
+ 
+-    if (s_bc7215_paired.load()) {
+-        if (matter_state ==
+-            app_matter_state_t::NOT_COMMISSIONED) {
+-
+-            app_driver_led_set_mode(
+-                LED_MODE_BLINK_2X_1HZ);
+-            return;
+-        }
+-
+-        app_driver_led_set_mode(
+-            LED_MODE_BREATH_3S);
++    // Commissioning and offline / connecting: approximately 1 Hz.
++    if (state == app_matter_state_t::COMMISSIONING ||
++        state == app_matter_state_t::COMMISSIONED_OFFLINE) {
++        app_driver_led_set_mode(LED_MODE_BLINK_1HZ);
+         return;
+     }
+ 
+-
+-	app_driver_led_set_mode(LED_MODE_OFF);
+-}
++    // Wi-Fi connected: network subscription state does not change the LED.
++    app_driver_led_set_mode(paired ? LED_MODE_BREATH_3S : LED_MODE_BLINK_1X_1HZ);
++}
+--- a/app_main.cpp
++++ b/app_main.cpp
+@@ -310,8 +310,9 @@
+ 	    );
+ 
+ 	static constexpr int16_t DEFAULT_TARGET_TEMP_X100 = 2500;
+-	room_air_conditioner_config.thermostat.local_temperature =
+-	    DEFAULT_TARGET_TEMP_X100;
++	// Start as unknown until the HDC2010 provides its first actual reading.
++    room_air_conditioner_config.thermostat.local_temperature =
++        nullable<int16_t>();
+ 	 room_air_conditioner_config
+ 	    .thermostat
+ 	    .features
+@@ -326,17 +327,25 @@
+ 	    .occupied_heating_setpoint =
+ 	        DEFAULT_TARGET_TEMP_X100;
+ 	
+-	room_air_conditioner_config
+-	    .thermostat
+-	    .local_temperature =
+-	        DEFAULT_TARGET_TEMP_X100;
++
+ 
+ 	endpoint_t *endpoint = room_air_conditioner::create(node, &room_air_conditioner_config, ENDPOINT_FLAG_NONE, room_air_conditioner_handle);
+     ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "Failed to create room air conditioner endpoint"));
+ 
+     room_air_conditioner_endpoint_id = endpoint::get_id(endpoint);
+     ESP_LOGI(TAG, "Room Air Conditioner created with endpoint_id %d", room_air_conditioner_endpoint_id);
+-	
++
++    // Relative Humidity Measurement (0x0405) is an optional server cluster
++    // permitted on the Room Air Conditioner endpoint. Do not create a third
++    // Matter endpoint: humidity belongs to this physical air conditioner.
++    cluster::relative_humidity_measurement::config_t humidity_config{};
++    humidity_config.min_measured_value = nullable<uint16_t>(0);
++    humidity_config.max_measured_value = nullable<uint16_t>(10000);
++    cluster_t *humidity_cluster = cluster::relative_humidity_measurement::create(
++        endpoint, &humidity_config, CLUSTER_FLAG_SERVER);
++    ABORT_APP_ON_FAILURE(humidity_cluster != nullptr,
++        ESP_LOGE(TAG, "Failed to create Relative Humidity Measurement cluster"));
++
+ 	cluster_t *thermostat_cluster = cluster::get(endpoint, Thermostat::Id);
+ 	ABORT_APP_ON_FAILURE(thermostat_cluster != nullptr,
+ 	    ESP_LOGE(TAG, "Failed to get Thermostat cluster"));
+@@ -473,6 +482,13 @@
+     /* Starting driver with default values */
+     app_driver_room_air_conditioner_set_defaults(room_air_conditioner_endpoint_id);
+ 
++    // Now the Matter stack and attributes are ready for reports.
++    app_driver_update_led_states();
++    err = app_driver_environment_sensor_start();
++    if (err != ESP_OK) {
++        ESP_LOGE(TAG, "HDC2010 monitor unavailable; IR AC control remains operational");
++    }
++
+ #if CONFIG_ENABLE_CHIP_SHELL
+     esp_matter::console::diagnostics_register_commands();
+     esp_matter::console::wifi_register_commands();
+--- a/app_priv.h
++++ b/app_priv.h
+@@ -27,9 +27,9 @@
+     LED_MODE_ON,           // Always on
+     LED_MODE_BLINK_1HZ,    // Blink at 1 Hz (toggle every 500 ms)
+     LED_MODE_BLINK_3HZ,    // Blink at 3 Hz (toggle every 166 ms)
+-    LED_MODE_BREATH_3S,    // Brief flash every 3 seconds
+-	LED_MODE_BLINK_1X_1HZ, // Flash once every second
+-	LED_MODE_BLINK_2X_1HZ, // Flash twice every second
++    LED_MODE_BREATH_3S,    // Smooth PWM breathing, 3-second cycle
++	LED_MODE_BLINK_1X_1HZ, // One short flash per 2 seconds
++	LED_MODE_BLINK_2X_1HZ, // Two short flashes per 2 seconds
+ 	ONE_SHOT_FLASH_3X,	   // Flash three times
+ 	ONE_SHOT_ON_1S,			// Stay on for 1 second
+ } led_display_mode_t;
+@@ -95,6 +95,9 @@
+ 
+ void app_driver_set_subscription_active(bool active);
+ 
++/** Start the GPIO7/GPIO2 HDC2010 monitor (after esp_matter::start). */
++esp_err_t app_driver_environment_sensor_start();
++
+ #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
+ #define ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG()                                           \
+     {                                                                                   \
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,5 +1,6 @@
+ idf_component_register(SRC_DIRS          "."
+-                       PRIV_INCLUDE_DIRS  "." "${ESP_MATTER_PATH}/examples/common/utils"
++                        PRIV_INCLUDE_DIRS  "." "${ESP_MATTER_PATH}/examples/common/utils"
++                       PRIV_REQUIRES       esp_driver_i2c esp_driver_ledc
+ )
+ 
+ target_compile_options(${COMPONENT_LIB} PRIVATE "-DCHIP_HAVE_CONFIG_H")
